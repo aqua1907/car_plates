@@ -39,23 +39,26 @@ def main():
 
     config = ConfigObj(r"config.ini")  # read Platerecognizer config file
     filename = config['cameras']['camera-1']['jsonlines_file']  # get filename of results
-    params = dict()
 
     if os.path.exists(filename):  # check file with results exists
         if os.path.getsize(filename) > 0:  # check if file is not empty
             data = read_jsonl(filename)
-            last_timestamp = dateutil.parser.isoparse(data["timestamp"])
-            print(last_timestamp)
+            last_timestamp = dateutil.parser.isoparse(data["timestamp_local"])
+            # print(last_timestamp)
         else:
-            last_timestamp = datetime.datetime.now().isoformat()    # if file is empty last time equals datetime.now()
+            last_timestamp = datetime.datetime.now().astimezone().isoformat()
+            last_timestamp = dateutil.parser.isoparse(last_timestamp)  # Convert str time iso format to datetime
     else:
-        last_timestamp = datetime.datetime.now().isoformat()    # if file is does not exist time equals datetime.now()
+        # if file is does not exist time equals datetime.now()
+        last_timestamp = datetime.datetime.now().astimezone().isoformat()
+        last_timestamp = dateutil.parser.isoparse(last_timestamp)  # Convert str time iso format to datetime
 
+    params = ""
     while True:
         if os.path.exists(filename):  # check file with results exists
             if os.path.getsize(filename) > 0:  # check if file is not empty
                 data = read_jsonl(filename)
-                new_timestamp = dateutil.parser.isoparse(data["timestamp"])
+                new_timestamp = dateutil.parser.isoparse(data["timestamp_local"])
                 t_delta = (new_timestamp - last_timestamp).total_seconds()
                 if t_delta > 0:
                     last_timestamp = new_timestamp
@@ -67,7 +70,7 @@ def main():
                                  '"gateId": "%s", "id": "%s", "isFront": %s, ' \
                                  '"parkingId": "%s", "time": "%s"}' % ("", "", result["plate"],
                                                                        data["camera_id"], "", "true",
-                                                                       "", data["timestamp"])
+                                                                       "", last_timestamp)
 
                     query = gql(query_code)
                     result = client.execute(query, variable_values={"params": params})  # Execute query

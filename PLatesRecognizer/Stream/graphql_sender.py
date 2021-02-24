@@ -1,3 +1,5 @@
+import datetime
+
 import graphene
 import json
 import os
@@ -11,9 +13,9 @@ class CarInfo(graphene.ObjectType):
         The class that describes all info about the car from the Platerecognizer results
     """
     plate = graphene.String()
-    plateBbox = GenericScalar()
+    plateBbox = graphene.String()
     vehicleType = graphene.String()
-    vehicleBbox = GenericScalar()
+    vehicleBbox = graphene.String()
     region = graphene.String()
 
 
@@ -23,6 +25,7 @@ class Query(graphene.ObjectType):
     """
     carInfo = graphene.Field(CarInfo, result=GenericScalar())
     camera = graphene.String(camera_id=graphene.String())  # add info about from which camera results were captured
+    timestamp = graphene.String(time=graphene.String())
 
     def resolve_carInfo(self, info, result):
         """
@@ -48,6 +51,15 @@ class Query(graphene.ObjectType):
         """
         return camera_id
 
+    def resolve_timestamp(self, info, time):
+        """
+        Get car number registration time
+        :param info: default parameter
+        :param time: String, time in ISO format
+        :return: Datetime in ISO format of car number registration time
+        """
+        return time
+
 
 def read_jsonl(path):
     """
@@ -56,7 +68,7 @@ def read_jsonl(path):
     :return: Dict
     """
     with open(filename) as file_obj:  # read file
-        line = next(iter(file_obj))  # get first line of file with results
+        line = file_obj.read().splitlines()[-1]  # get last line of file with results
         data = json.loads(line)  # load data
     file_obj.close()
 
@@ -71,9 +83,11 @@ if __name__ == "__main__":
     schema = graphene.Schema(query=Query)
     query = """
                 query($result: GenericScalar,
-                      $cameraId: String)
+                      $cameraId: String,
+                      $time: String)
                 {
                     camera(cameraId: $cameraId)
+                    timestamp(time: $time)
                     carInfo(result: $result)
                     {
                         plate
@@ -84,17 +98,32 @@ if __name__ == "__main__":
                     }
                 }
             """
-    data = read_jsonl(filename)
-    last_timestamp = dateutil.parser.isoparse(data["timestamp"])    # get_last record in results
+    if os.path.exists(filename):  # check file with results exists
+        if os.path.getsize(filename) > 0:  # check if file is not empty
+            data = read_jsonl(filename)
+            last_timestamp = dateutil.parser.isoparse(data["timestamp_local"])
+            # print(last_timestamp)
+        else:
+            # if file is empty last time equals datetime.now()
+            last_timestamp = datetime.datetime.now().astimezone().isoformat()
+            last_timestamp = dateutil.parser.isoparse(last_timestamp)  # Convert str time iso format to datetime
+    else:
+        # if file is does not exist time equals datetime.now()
+        last_timestamp = datetime.datetime.now().astimezone().isoformat()
+        last_timestamp = dateutil.parser.isoparse(last_timestamp)   # Convert str time iso format to datetime
+
+    print(last_timestamp)
     while True:
         if os.path.exists(filename):  # check file with results exists
             if os.path.getsize(filename) > 0:  # check if file is not empty
                 data = read_jsonl(filename)
-                new_timestamp = dateutil.parser.isoparse(data["timestamp"])
+                new_timestamp = dateutil.parser.isoparse(data["timestamp_local"])
                 t_delta = (new_timestamp - last_timestamp).total_seconds()
                 if t_delta > 0:
+                    last_timestamp = new_timestamp
                     for result in data["results"]:
                         # Loop for each detect plate and execute query with variables
                         out = schema.execute(query, variables={"cameraId": data["camera_id"],
+                                                               "time": last_timestamp,
                                                                "result": result})
-                        print(out)
+                        print(json.dumps(out.data, indent=4))
