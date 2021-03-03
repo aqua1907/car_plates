@@ -29,6 +29,23 @@ def compute_area(bbox):
     return area
 
 
+def get_settings(path):
+    """
+    Read JSON file with given settings
+    :param path: String. Path to the file
+    :return:
+    """
+    with open(path) as file_obj:
+        settings = json.load(path)
+    file_obj.close()
+
+    parking_id = settings["parkingId"]
+    get_id = settings["getId"]
+    camera_front = settings["cameraFront"]
+
+    return parking_id, get_id, camera_front
+
+
 def main():
     token = ""
     query_code = """
@@ -51,6 +68,7 @@ def main():
     if os.path.exists(filename):  # check file with results exists
         if os.path.getsize(filename) > 0:  # check if file is not empty
             data = read_jsonl(filename)
+            # Get last size of the file and last record of car licence plate
             last_filesize = os.path.getsize(filename)
             last_license_plate = data['results'][0]['plate']
         else:
@@ -60,6 +78,8 @@ def main():
         last_filesize = 0
         last_license_plate = ''
 
+    parking_id, get_id, camera_front = get_settings(filename)
+
     send = False
     counter_front = 0
     counter_back = 0
@@ -68,49 +88,56 @@ def main():
         if os.path.exists(filename):  # check file with results exists
             if os.path.getsize(filename) > 0:  # check if file is not empty
                 new_filesize = os.path.getsize(filename)
+                # Update last file's size if true and read data
                 if new_filesize > last_filesize:
                     last_filesize = new_filesize
                     data = read_jsonl(filename)
-                    print(f"Counter front = {counter_front}")
-                    print(f"Counter back = {counter_back}")
 
-                    if data['results'][0]['vehicle']["score"] != 0.0:
+                    if data['results'][0]['vehicle']["score"] != 0.0:   # check car was recognized
                         new_license_plate = data['results'][0]['plate']
-                        print(new_license_plate)
+                        # If get new license plat it will compute initial area of bbox of plate
                         if new_license_plate != last_license_plate:
                             last_license_plate = new_license_plate
-                            initial_bbox = data['results'][0]['box']
-                            initial_box_area = compute_area(initial_bbox)
-                            print(f"Initial bbox = {initial_box_area}")
+                            last_bbox = data['results'][0]['box']
+                            last_box_area = compute_area(last_bbox)
+                        # Condition. if the same vehicle re-enter or re-exit
+                        elif counter_front == 0 and counter_back == 0:
+                            last_bbox = data['results'][0]['box']
+                            last_box_area = compute_area(last_bbox)
                         else:
+                            # For the same license plate compute area of bboxes to detect if vehicle
+                            # is approaching or driving away
                             bbox = data['results'][0]['box']
                             box_area = compute_area(bbox)
                             print(f"bbox = {box_area}")
 
-                            if box_area > initial_box_area:
+                            # Need to count a certain amount of frames(records in the file) to
+                            # to detect if vehicle is approaching or driving away
+                            if box_area > last_box_area:
+                                last_box_area = box_area
                                 counter_front += 1
                                 if counter_front == 7:
                                     is_front = "true"
                                     send = True
-                            elif box_area < initial_box_area:
+                            elif box_area < last_box_area:
+                                last_box_area = box_area
                                 counter_back += 1
                                 if counter_back == 7:
                                     is_front = "false"
                                     send = True
-
+                # if get same file size and has send=True than create a query and send to the server
                 elif new_filesize == last_filesize:
                     if send:
                         data = read_jsonl(filename)
                         # rename camera- to gate while keeping camera_id
-                        data["camera_id"] = data["camera_id"].replace("camera-", "gate")
                         result = data["results"][0]
 
                         # Create queryString and pass as variable
                         params = '{"carColor": "%s", "carMark": "%s", "carNumber": "%s", ' \
                                  '"gateId": "%s", "id": "%s", "isFront": %s, ' \
                                  '"parkingId": "%s", "time": "%s"}' % ("", "", result["plate"],
-                                                                       data["camera_id"], "", is_front,
-                                                                       "", data["timestamp_local"])
+                                                                       get_id, "", is_front,
+                                                                       parking_id, data["timestamp_local"])
 
                         query = gql(query_code)
                         result = client.execute(query, variable_values={"params": params})  # Execute query
