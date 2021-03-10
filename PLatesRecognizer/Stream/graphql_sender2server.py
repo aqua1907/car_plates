@@ -1,8 +1,10 @@
 from gql import Client, gql
 from gql.transport.requests import RequestsHTTPTransport
 from configobj import ConfigObj
+import video_writer
 import json
 import os
+import cv2
 
 
 def read_jsonl(path):
@@ -36,7 +38,7 @@ def get_settings(path):
     :return:
     """
     with open(path) as file_obj:
-        settings = json.load(path)
+        settings = json.load(file_obj)
     file_obj.close()
 
     parking_id = settings["parkingId"]
@@ -46,11 +48,27 @@ def get_settings(path):
     return parking_id, get_id, camera_front
 
 
+def get_last_bbox(data):
+    last_bbox = data['results'][0]['box']
+    last_box_area = compute_area(last_bbox)
+
+    return last_box_area
+
+
 def main():
     token = ""
-    query_code = """
+    recdata_query = """
                     mutation($params: String) {
                     createContainer(datatype:"RECDATA", data: $params)
+                      {
+                        data
+                      }
+                    }
+                 """
+
+    recfree_query = """
+                    mutation($params: String) {
+                    createContainer(datatype:"RECFREE", data: $params)
                       {
                         data
                       }
@@ -63,7 +81,7 @@ def main():
     client = Client(transport=transport, fetch_schema_from_transport=True)
 
     config = ConfigObj(r"config.ini")  # read Platerecognizer config file
-    filename = config['cameras']['camera-2']['jsonlines_file']  # get filename of results
+    filename = config['cameras']['camera-1']['jsonlines_file']  # get filename of results
 
     if os.path.exists(filename):  # check file with results exists
         if os.path.getsize(filename) > 0:  # check if file is not empty
@@ -78,11 +96,14 @@ def main():
         last_filesize = 0
         last_license_plate = ''
 
-    parking_id, get_id, camera_front = get_settings(filename)
+    parking_id, gate_id, camera_front = get_settings(r"settings.json")
 
-    send = False
+    rec_data = False
+    rec_free = False
     counter_front = 0
     counter_back = 0
+
+    url = config['cameras']['camera-1']['url']
 
     while True:
         if os.path.exists(filename):  # check file with results exists
@@ -98,12 +119,10 @@ def main():
                         # If get new license plat it will compute initial area of bbox of plate
                         if new_license_plate != last_license_plate:
                             last_license_plate = new_license_plate
-                            last_bbox = data['results'][0]['box']
-                            last_box_area = compute_area(last_bbox)
+                            last_box_area = get_last_bbox(data)
                         # Condition. if the same vehicle re-enter or re-exit
                         elif counter_front == 0 and counter_back == 0:
-                            last_bbox = data['results'][0]['box']
-                            last_box_area = compute_area(last_bbox)
+                            last_box_area = get_last_bbox(data)
                         else:
                             # For the same license plate compute area of bboxes to detect if vehicle
                             # is approaching or driving away
@@ -118,33 +137,41 @@ def main():
                                 counter_front += 1
                                 if counter_front == 7:
                                     is_front = "true"
-                                    send = True
+                                    rec_data = True
                             elif box_area < last_box_area:
                                 last_box_area = box_area
                                 counter_back += 1
                                 if counter_back == 7:
                                     is_front = "false"
-                                    send = True
+                                    rec_data = True
                 # if get same file size and has send=True than create a query and send to the server
                 elif new_filesize == last_filesize:
-                    if send:
+                    if rec_data:
                         data = read_jsonl(filename)
-                        # rename camera- to gate while keeping camera_id
                         result = data["results"][0]
 
                         # Create queryString and pass as variable
                         params = '{"carColor": "%s", "carMark": "%s", "carNumber": "%s", ' \
                                  '"gateId": "%s", "id": "%s", "isFront": %s, ' \
                                  '"parkingId": "%s", "time": "%s"}' % ("", "", result["plate"],
-                                                                       get_id, "", is_front,
+                                                                       gate_id, "", is_front,
                                                                        parking_id, data["timestamp_local"])
 
-                        query = gql(query_code)
+                        query = gql(recdata_query)
                         result = client.execute(query, variable_values={"params": params})  # Execute query
-                        print(result)
-                        send = False
+
+                        # print(result)
+                        rec_data = False
+                        rec_free = True
                         counter_front = 0
                         counter_back = 0
+                    elif rec_free:
+                        data = read_jsonl(filename)
+
+                        # Create queryString and pass as variable
+                        params = '{"parkingId": "%s", "time": "%s"}' % (parking_id, data["timestamp_local"])
+                        query = gql(recfree_query)
+                        result = client.execute(query, variable_values={"params": params})  # Execute query
 
 
 if __name__ == "__main__":
