@@ -144,7 +144,7 @@ def main():
         ret, frame = cap.read()
         # If ret is true. If the frame is reading correctly then save frame to video file
         if ret:
-            writer.write(frame)
+            writer.write(frame.astype('uint8'))
             if t_delta >= 3600:     # After one hour of recorded video create a new video file
                 timestamp = new_time.strftime("%d-%m-%y_%H-%M-%S")
                 writer.release()
