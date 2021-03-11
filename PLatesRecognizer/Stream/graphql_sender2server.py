@@ -1,7 +1,8 @@
+import datetime
+
 from gql import Client, gql
 from gql.transport.requests import RequestsHTTPTransport
 from configobj import ConfigObj
-import video_writer
 import json
 import os
 import cv2
@@ -22,6 +23,11 @@ def read_jsonl(path):
 
 
 def compute_area(bbox):
+    """
+    Compute area of bounding box by top left and right bottom coordinates
+    :param bbox: (Dictionary) With 4 coordinates xyxy
+    :return: (Float) area ob bbox
+    """
     x1, y1 = bbox["xmin"], bbox["ymin"]
     x2, y2 = bbox["xmax"], bbox["ymax"]
 
@@ -35,7 +41,7 @@ def get_settings(path):
     """
     Read JSON file with given settings
     :param path: String. Path to the file
-    :return:
+    :return: (Strings)
     """
     with open(path) as file_obj:
         settings = json.load(file_obj)
@@ -49,10 +55,31 @@ def get_settings(path):
 
 
 def get_last_bbox(data):
+    """
+    Select last record in the result file and compute area of this last bounding box
+    :param data: Dictionary of the JSON file
+    :return: (Float) Computed area of the last bbox
+    """
     last_bbox = data['results'][0]['box']
     last_box_area = compute_area(last_bbox)
 
     return last_box_area
+
+
+def get_video_capture(url):
+    """
+    Create video capture from the given stream using OpenCV
+    :param url: (Str) path to file, stream. (Int) choose a video device
+    :return: capture scene, coder for video writer, size of the input video
+    """
+    cap = cv2.VideoCapture(url)
+    frame_width = int(cap.get(3))
+    frame_height = int(cap.get(4))
+    size = (frame_width, frame_height)
+
+    fourcc = cv2.VideoWriter_fourcc(*'XVID')
+
+    return cap, fourcc, size
 
 
 def main():
@@ -104,8 +131,26 @@ def main():
     counter_back = 0
 
     url = config['cameras']['camera-1']['url']
+    cap, fourcc, size = get_video_capture(url)
+    last_time = datetime.datetime.now()     # get present time for comparison in the future
+    timestamp = last_time.strftime("%d-%m-%y_%H-%M-%S")  # conver datetime to string
+    # Create video writer object with given parameters
+    writer = cv2.VideoWriter(r"results/{}.avi".format(timestamp), fourcc, 30.0, size)
 
-    while True:
+    while cap.isOpened():
+        new_time = datetime.datetime.now()  # current time to check every hour
+        t_delta = (new_time - last_time).total_seconds()
+
+        ret, frame = cap.read()
+        # If ret is true. If the frame is reading correctly then save frame to video file
+        if ret:
+            writer.write(frame)
+            if t_delta >= 3600:     # After one hour of recorded video create a new video file
+                timestamp = new_time.strftime("%d-%m-%y_%H-%M-%S")
+                writer.release()
+                writer = cv2.VideoWriter(r"results/{}.avi".format(timestamp), fourcc, 30.0, size)
+        else:
+            print("Camera stream not detected")
         if os.path.exists(filename):  # check file with results exists
             if os.path.getsize(filename) > 0:  # check if file is not empty
                 new_filesize = os.path.getsize(filename)
